@@ -1,0 +1,394 @@
+#!/bin/bash/php
+
+# Create a cli that can be used to manage posts using php.
+
+<?php
+
+
+# The application should run from the command line,
+# accept user actions and inputs as arguments,
+# and store the tasks in a JSON file. The user should be able to:
+
+# Add, Update, and Delete tasks
+# Mark a task as in progress or done
+# List all tasks
+# List all tasks that are done
+# List all tasks that are not done
+# List all tasks that are in progress
+
+# Adding a new task
+#task-cli add "Buy groceries"
+# Output: Task added successfully (ID: 1)
+
+# Updating and deleting tasks
+#task-cli update 1 "Buy groceries and cook dinner"
+#task-cli delete 1
+
+# Marking a task as in progress or done
+#task-cli mark-in-progress 1
+#task-cli mark-done 1
+
+# Listing all tasks
+#task-cli list
+
+# Listing tasks by status
+#task-cli list done
+#task-cli list todo
+#task-cli list in-progress
+
+class Application extends Storage
+{
+    /**
+     * Initialize the application.
+     *
+     * @return void
+     */
+    public function initialize(): void
+    {
+        // If current interface is not CLI
+        // Do not run application
+        $this->interfaceIsCli();
+
+        // Create directory if not exists
+        // Set permission that will allows the owner to create, delete, or modify files
+        // in the folder, and others to access files without modifying the folder contents.
+        $this->createDirectory();
+
+        // Create file storage if not exists
+        // and change permission that ensures only the owner can modify the file,
+        // while others can read it (more secure).
+        $this->createFile();
+    }
+
+    /**
+     * Generate a controller
+     *
+     * @return void
+     */
+    public function controller(): void
+    {
+        // Script name is the index 0.
+        // even the script was ran using php or task-cli
+        $commands = array_slice($_SERVER['argv'], 1);
+
+        $actions = new Actions();
+
+        // Check if user is adding the argument -h
+        (new HelpMessages)->handle(...$commands);
+
+        match ($commands[0] ?? '') {
+            'add' => $actions->store($commands[1]),
+            'update' => $actions->update($commands[1], join(' ', array_splice($commands, 2))),
+            'delete' => $actions->destroy($commands[1]),
+            default => null
+        };
+    }
+
+    /**
+     * Check if interface is CLI
+     *
+     * @return void'
+     */
+    public function interfaceIsCli(): void
+    {
+        if (php_sapi_name() !== 'cli') {
+            die('This script should only be ran on CLI');
+        }
+    }
+}
+
+class Actions extends Application
+{
+    public Task $task;
+
+    /**
+     * Create an instance of a class.
+     *
+     * @return void
+     */
+    public function __construct()
+    {
+        $this->task = new Task();
+    }
+
+    /**
+     * Store new task to the storage.
+     *
+     * @param string|null $description
+     * @return void
+     */
+    public function store(?string $description): void
+    {
+        // Validate payload
+        (new Validators())->validateDescription($description);
+
+        // Re-initialize the cli
+        $this->initialize();
+        $data = $this->getContents();
+        $payload = $this->task->factory(
+            description: $description
+        );
+        $data[] = $payload;
+        $id = $payload['id'];
+
+        file_put_contents($this->getPath(), json_encode($data));
+        echo "Output: Task added successfully (ID: {$id})";
+    }
+
+    /**
+     * Update the specified task from the storage.
+     *
+     * @param string|null $id
+     * @param string|null $description
+     * @return void
+     */
+    public function update(?string $id, ?string $description): void
+    {
+        // Validate payload
+        $validators = new Validators();
+        $validators->validateIdExistence($id);
+        $validators->validateDescription($description);
+
+        // Re-initialize the cli
+        $this->initialize();
+
+        $data = array_map(function (array $item) use ($id, $description) {
+            if ($id === (string) $item['id']) return [
+                ...$item,
+                'description' => $description
+            ];
+
+            return $item;
+        }, $this->getContents());
+
+        file_put_contents($this->getPath(), json_encode($data));
+        echo "Output: Task updated successfully (ID: {$id})";
+    }
+
+    /**
+     * Delete the specified task from the storage.
+     *
+     * @param string $id
+     * @return void
+     */
+    public function destroy(string $id): void
+    {
+        // Validate payload
+        (new Validators())->validateIdExistence($id);
+
+        // Re-initialize the cli
+        $this->initialize();
+
+        $data = array_values(array_filter($this->getContents(), fn(array $item) => $id !== (string) $item['id']));
+        file_put_contents($this->getPath(), json_encode($data));
+        echo "Output: Task deleted successfully (ID: {$id})";
+    }
+}
+
+class Validators extends Storage
+{
+    /**
+     * Validate if description exists.
+     *
+     * @param string|null $description
+     * @return void
+     */
+    public function validateDescription(?string $description): void
+    {
+        if (!$description) die ('Please enter the task description.');
+    }
+
+    /**
+     * Validate if id exists
+     *
+     * @param string $id
+     * @return void
+     */
+    public function validateIdExistence(string $id): void
+    {
+        if (empty(array_filter($this->getContents(), fn(array $item) => (string) $item['id'] === $id))) die('Task does not exists');
+    }
+
+    /**
+     * Validate if id already exists.
+     *
+     * @param string $id
+     * @return bool
+     */
+    public function validateIdUniqueness(string $id): bool
+    {
+        return !empty(array_filter($this->getContents(), fn(array $item) => (string) $item['id'] === $id));
+    }
+}
+
+class HelpMessages
+{
+    /**
+     * Display the commands based on the help command.
+     *
+     * @param string|null ...$commands
+     * @return void
+     */
+    public function handle(?string ...$commands): void
+    {
+        $command = join(' ', $commands);
+
+        echo match ($command) {
+            '-h' => $this->overall(),
+            'list -h' => $this->taskList(),
+            default => null
+        };
+    }
+
+    public function heading(): string
+    {
+        return <<<EOF
+        Usage: php task-cli [commands]
+               or ./task-cli [commands] if executable.\n        
+        EOF;
+    }
+
+    /**
+     * List available commands.
+     *
+     * @return string
+     */
+    private function overall(): string
+    {
+        return <<<HEREDOC
+        {$this->heading()}}
+        
+        Available Commands:
+            add [description]           Create new task and store to the storage.
+            update [id] [description]   Update the specified task description using id from the storage.
+            delete [id]                 Delete the specified task from the storage.
+            mark-in-progress [id]       Mark the specified task as in progress.
+            mark-done [id]              Mark the specified task as done.
+            list [status]               List all tasks.
+    HEREDOC;
+    }
+
+    /**
+     * The available commands of task lists.
+     *
+     * @return string
+     */
+    private function taskList(): string
+    {
+        return <<<HEREDOC
+        {$this->heading()}}
+        
+        Available status:
+            done                        List all done tasks.
+            todo                        List all todo tasks.
+            in-progress                 List all in-progress tasks.
+    HEREDOC;
+    }
+}
+
+class Storage
+{
+    // The directory of the file to be used as a storage.
+    const DATA_DIRECTORY = 'storage';
+
+    // The filename of the data storage.
+    const DATA_FILE_NAME = 'data.json';
+
+    /**
+     * Return the storage path of the file.
+     *
+     * @return string
+     */
+    public function getPath(): string
+    {
+        return self::DATA_DIRECTORY . DIRECTORY_SEPARATOR . self::DATA_FILE_NAME;
+    }
+
+    /**
+     * Create the folder where to store the storage directory.
+     *
+     * @return void
+     */
+    public function createDirectory(): void
+    {
+        if (!is_dir(filename: self::DATA_DIRECTORY)) {
+            if (!mkdir(directory: self::DATA_DIRECTORY, permissions: 0755, recursive: true)) die('Unable to create directory : ' . self::DATA_DIRECTORY);
+        }
+    }
+
+    /**
+     * Create the file to be saved on the storage directory.
+     *
+     * @return void
+     */
+    public function createFile(): void
+    {
+        if (!file_exists(filename: $this->getPath())) {
+            if (!touch(filename: $this->getPath())) {
+                die('Unable to create file : ' . $this->getPath());
+            }
+
+            chmod(filename: $this->getPath(), permissions: 0644);
+        }
+    }
+
+    /**
+     * Get the contents of the json file used as storage.
+     *
+     * @return array
+     */
+    public function getContents(): array
+    {
+        print_r(json_decode(file_get_contents($this->getPath()), true), true);
+        return json_decode(file_get_contents($this->getPath()), true) ?? [];
+    }
+}
+
+class Task extends Storage
+{
+    /**
+     * The factory for the task.
+     *
+     * @param string $description
+     * @param string|null $id
+     * @param string $status
+     * @param string|null $createdAt
+     * @param string|null $updatedAt
+     * @return array
+     */
+    public function factory(string $description, ?string $id = null, string $status = 'todo', ?string $createdAt = null, ?string $updatedAt = null): array
+    {
+        return [
+            'id'          => $id ?? $this->getLatestId(),
+            'description' => $description,
+            'status'      => $status,
+            'createdAt'   => $createdAt ?? date('Y-m-d H:i:s'),
+            'updatedAt'   => $updatedAt ?? date('Y-m-d H:i:s')
+        ];
+    }
+
+    /**
+     * Get new id from the storage.
+     */
+    public function getLatestId(): int
+    {
+        if (empty($this->getContents())) return 1;
+
+        $ids = array_column(array_map(fn(array $item) => [...$item, 'id' => intval($item['id'])], $this->getContents()), 'id');
+        $id = max($ids) + 1;
+
+        while ((new Validators())->validateIdUniqueness($id)) {
+            $id+=1;
+        }
+
+        return $id;
+    }
+}
+
+
+// Run initialization
+$application = new Application();
+$application->initialize();
+
+// Perform the actions
+$application->controller();
