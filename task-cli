@@ -76,9 +76,11 @@ class Application extends Storage
         // Check if user is adding the argument -h
         (new HelpMessages)->handle(...$commands);
 
+        $joinCommandAsOneSentence = fn(array $commands, $offset = 1): string => join(' ', array_splice($commands, $offset));
+
         match ($commands[0] ?? '') {
-            'add' => $actions->store($commands[1]),
-            'update' => $actions->update($commands[1], join(' ', array_splice($commands, 2))),
+            'add' => $actions->store($joinCommandAsOneSentence($commands)),
+            'update' => $actions->update($commands[1], $joinCommandAsOneSentence($commands, 2)),
             'delete' => $actions->destroy($commands[1]),
             default => null
         };
@@ -92,7 +94,8 @@ class Application extends Storage
     public function interfaceIsCli(): void
     {
         if (php_sapi_name() !== 'cli') {
-            die('This script should only be ran on CLI');
+            fwrite(STDERR, 'This script should only be ran through CLI');
+            exit(1);
         }
     }
 }
@@ -206,7 +209,10 @@ class Validators extends Storage
      */
     public function validateIdExistence(string $id): void
     {
-        if (empty(array_filter($this->getContents(), fn(array $item) => (string) $item['id'] === $id))) die('Task does not exists');
+        if (empty(array_filter($this->getContents(), fn(array $item) => (string) $item['id'] === $id))) {
+            fwrite(STDERR, 'Task does not exists!');
+            exit(1);
+        }
     }
 
     /**
@@ -312,7 +318,10 @@ class Storage
     public function createDirectory(): void
     {
         if (!is_dir(filename: self::DATA_DIRECTORY)) {
-            if (!mkdir(directory: self::DATA_DIRECTORY, permissions: 0755, recursive: true)) die('Unable to create directory : ' . self::DATA_DIRECTORY);
+            if (!mkdir(directory: self::DATA_DIRECTORY, permissions: 0755, recursive: true)) {
+                fwrite(STDERR, 'Unable to create directory : ' . self::DATA_DIRECTORY);
+                exit(1);
+            }
         }
     }
 
@@ -325,7 +334,8 @@ class Storage
     {
         if (!file_exists(filename: $this->getPath())) {
             if (!touch(filename: $this->getPath())) {
-                die('Unable to create file : ' . $this->getPath());
+                fwrite(STDERR, 'Unable to create file : ' . $this->getPath());
+                exit(1);
             }
 
             chmod(filename: $this->getPath(), permissions: 0644);
@@ -339,7 +349,6 @@ class Storage
      */
     public function getContents(): array
     {
-        print_r(json_decode(file_get_contents($this->getPath()), true), true);
         return json_decode(file_get_contents($this->getPath()), true) ?? [];
     }
 }
@@ -384,7 +393,6 @@ class Task extends Storage
         return $id;
     }
 }
-
 
 // Run initialization
 $application = new Application();
